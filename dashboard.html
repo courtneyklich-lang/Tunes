@@ -265,6 +265,41 @@
       background: linear-gradient(90deg, var(--accent-3), #d7bf6e);
     }
 
+    .stack-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .stack-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stack-legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      flex: 0 0 auto;
+    }
+
+    .stack-track {
+      display: flex;
+      height: 14px;
+      background: rgba(81, 65, 54, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .stack-segment {
+      height: 100%;
+      min-width: 0;
+    }
+
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -422,14 +457,16 @@
           <div class="split-head">
             <div>
               <h2>Top Artists</h2>
-              <div class="muted">The names that anchor the whole history.</div>
+              <div class="muted">The names that anchor the whole history, split by year.</div>
             </div>
             <div class="pill" id="loyalty-pill"></div>
           </div>
+          <div class="stack-legend" id="top-artists-legend"></div>
           <div class="chart" id="top-artists-chart"></div>
         </div>
         <div class="panel">
           <h2>Top Albums</h2>
+          <div class="stack-legend" id="top-albums-legend"></div>
           <div class="chart" id="top-albums-chart"></div>
         </div>
       </div>
@@ -570,6 +607,8 @@
 
     const formatInt = new Intl.NumberFormat("en-US");
     const formatPct = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+    const yearColors = ["#c8643b", "#d88d3d", "#2f7d6a", "#6588b8", "#7d5a9f", "#b5547a", "#739c47"];
+    const years = data.plays_by_year.map((row) => row.year);
 
     const views = [...document.querySelectorAll(".view")];
     const tabs = [...document.querySelectorAll(".tab")];
@@ -625,6 +664,43 @@
       }).join("");
     }
 
+    function renderYearLegend(targetId) {
+      const host = document.getElementById(targetId);
+      host.innerHTML = years.map((year, index) => `
+        <div class="stack-legend-item">
+          <span class="stack-legend-swatch" style="background:${yearColors[index % yearColors.length]}"></span>
+          <span>${year}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderStackedBars(targetId, rows, labelHtml) {
+      const host = document.getElementById(targetId);
+      if (!rows.length) {
+        host.innerHTML = '<div class="empty">No rows to display.</div>';
+        return;
+      }
+
+      const max = Math.max(...rows.map((row) => row.plays));
+      host.innerHTML = rows.map((row) => {
+        const fullWidth = max ? (row.plays / max) * 100 : 0;
+        const segments = row.by_year.map((segment, index) => {
+          const segmentWidth = row.plays ? (segment.plays / row.plays) * 100 : 0;
+          return `<div class="stack-segment" style="width:${segmentWidth}%; background:${yearColors[index % yearColors.length]}" title="${segment.year}: ${formatInt.format(segment.plays)} plays"></div>`;
+        }).join("");
+
+        return `
+          <div class="bar-row">
+            <div>${labelHtml(row)}</div>
+            <div class="bar-track">
+              <div class="stack-track" style="width:${fullWidth}%">${segments}</div>
+            </div>
+            <div>${formatInt.format(row.plays)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
     function renderTable(targetId, rows, columns) {
       const host = document.getElementById(targetId);
       host.innerHTML = rows.map((row, index) => {
@@ -656,11 +732,10 @@
 
       document.getElementById("loyalty-pill").textContent = `${formatPct.format(data.artist_loyalty.top_n_pct)}% of all plays come from the top ${data.artist_loyalty.top_n}`;
 
-      renderBars("top-artists-chart", data.top_artists.slice(0, 12), "artist", "plays");
-      renderBars("top-albums-chart", data.top_albums.slice(0, 12).map((row) => ({
-        artist: `${row.artist} - ${row.album}`,
-        plays: row.plays
-      })), "artist", "plays", "gold");
+      renderYearLegend("top-artists-legend");
+      renderYearLegend("top-albums-legend");
+      renderStackedBars("top-artists-chart", data.top_artists_by_year.slice(0, 20), (row) => row.artist);
+      renderStackedBars("top-albums-chart", data.top_albums_by_year.slice(0, 20), (row) => `${row.artist} - ${row.album}`);
 
       renderTable("top-tracks-table", data.top_tracks, ["#", "artist", "track", "plays"]);
       renderTable("artist-discovery-table", data.artist_discovery, ["artist", "first_play", "total_plays"]);
