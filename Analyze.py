@@ -59,6 +59,33 @@ def compute_top_artists(df: pd.DataFrame, n: int = 15) -> list:
     return [{"artist": artist, "plays": int(plays)} for artist, plays in counts.items()]
 
 
+def compute_top_artists_by_year(df: pd.DataFrame, n: int = 20) -> list:
+    """Yearly play split for the top artists overall."""
+    top_artists = df["artist"].value_counts().head(n).index.tolist()
+    years = sorted(df["year"].unique())
+    counts = (
+        df[df["artist"].isin(top_artists)]
+        .groupby(["artist", "year"])
+        .size()
+        .reset_index(name="plays")
+    )
+    total_map = df["artist"].value_counts().to_dict()
+
+    result = []
+    for artist in top_artists:
+        yearly = []
+        for year in years:
+            match = counts[(counts["artist"] == artist) & (counts["year"] == year)]
+            plays = int(match["plays"].iloc[0]) if not match.empty else 0
+            yearly.append({"year": int(year), "plays": plays})
+        result.append({
+            "artist": artist,
+            "plays": int(total_map[artist]),
+            "by_year": yearly,
+        })
+    return result
+
+
 def compute_all_artists(df: pd.DataFrame) -> list:
     """Full artist ranking for filtering/search in the dashboard."""
     counts = df["artist"].value_counts()
@@ -101,6 +128,44 @@ def compute_top_albums(df: pd.DataFrame, n: int = 15) -> list:
     return counts.to_dict(orient="records")
 
 
+def compute_top_albums_by_year(df: pd.DataFrame, n: int = 20) -> list:
+    """Yearly play split for the top albums overall."""
+    album_df = df[df["album"].notna() & (df["album"] != "")].copy()
+    top_albums = (
+        album_df.groupby(["artist", "album"])
+        .size()
+        .sort_values(ascending=False)
+        .head(n)
+        .reset_index(name="plays")
+    )
+    years = sorted(df["year"].unique())
+    counts = (
+        album_df.merge(top_albums[["artist", "album"]], on=["artist", "album"])
+        .groupby(["artist", "album", "year"])
+        .size()
+        .reset_index(name="plays")
+    )
+
+    result = []
+    for _, row in top_albums.iterrows():
+        yearly = []
+        for year in years:
+            match = counts[
+                (counts["artist"] == row["artist"]) &
+                (counts["album"] == row["album"]) &
+                (counts["year"] == year)
+            ]
+            plays = int(match["plays"].iloc[0]) if not match.empty else 0
+            yearly.append({"year": int(year), "plays": plays})
+        result.append({
+            "artist": row["artist"],
+            "album": row["album"],
+            "plays": int(row["plays"]),
+            "by_year": yearly,
+        })
+    return result
+
+
 def compute_all_albums(df: pd.DataFrame) -> list:
     """Full album ranking for filtering/search in the dashboard."""
     counts = (
@@ -111,6 +176,16 @@ def compute_all_albums(df: pd.DataFrame) -> list:
         .reset_index(name="plays")
     )
     return counts.to_dict(orient="records")
+
+
+def build_dashboard_payload(data: dict, ranking_limit: int = 1500) -> dict:
+    """Trim browser payload so the static site stays lightweight."""
+    dashboard_data = dict(data)
+    dashboard_data["all_artists"] = data["all_artists"][:ranking_limit]
+    dashboard_data["all_tracks"] = data["all_tracks"][:ranking_limit]
+    dashboard_data["all_albums"] = data["all_albums"][:ranking_limit]
+    dashboard_data["ranking_limit"] = ranking_limit
+    return dashboard_data
 
 
 def compute_plays_by_year(df: pd.DataFrame) -> list:
@@ -127,7 +202,7 @@ def compute_plays_by_month(df: pd.DataFrame) -> list:
 
 
 def compute_plays_by_hour(df: pd.DataFrame) -> list:
-    """Average scrobbles by hour of day (0-23)."""
+    """Average scrobbles by hour of day (0–23)."""
     hour_totals = df["hour"].value_counts().sort_index()
     n_days = df["date"].nunique() or 1
     return [
@@ -165,7 +240,7 @@ def compute_sessions(df: pd.DataFrame, gap_minutes: int = 30) -> dict:
 
 def compute_artist_discovery(df: pd.DataFrame) -> list:
     """
-    First play date for each artist - returns the 20 most recently discovered artists
+    First play date for each artist — returns the 20 most recently discovered artists
     who have been played more than once (to filter one-offs).
     """
     artist_stats = df.groupby("artist").agg(
@@ -188,7 +263,7 @@ def compute_artist_discovery(df: pd.DataFrame) -> list:
 
 
 def compute_monthly_obsessions(df: pd.DataFrame, n: int = 10) -> list:
-    """Top artist per month - reveals era-specific obsessions."""
+    """Top artist per month — reveals era-specific obsessions."""
     monthly = (
         df.groupby(["ym", "artist"])
         .size()
@@ -257,16 +332,18 @@ def compute_streak(df: pd.DataFrame) -> dict:
 def run(csv_path: str, output_path: str):
     print(f"Loading data from {csv_path}...")
     df = load_data(csv_path)
-    print(f"  -> {len(df):,} scrobbles loaded")
+    print(f"  → {len(df):,} scrobbles loaded")
 
     print("Computing analytics...")
     data = {
         "overview": compute_overview(df),
-        "top_artists": compute_top_artists(df),
+        "top_artists": compute_top_artists(df, n=20),
+        "top_artists_by_year": compute_top_artists_by_year(df, n=20),
         "all_artists": compute_all_artists(df),
         "top_tracks": compute_top_tracks(df),
         "all_tracks": compute_all_tracks(df),
-        "top_albums": compute_top_albums(df),
+        "top_albums": compute_top_albums(df, n=20),
+        "top_albums_by_year": compute_top_albums_by_year(df, n=20),
         "all_albums": compute_all_albums(df),
         "plays_by_year": compute_plays_by_year(df),
         "plays_by_month": compute_plays_by_month(df),
@@ -286,18 +363,19 @@ def run(csv_path: str, output_path: str):
     with output_file.open("w") as f:
         json.dump(data, f, indent=2, default=str)
 
-    print(f"  -> Data saved to {output_file}")
+    print(f"  → Data saved to {output_file}")
 
     js_output = output_file.with_suffix(".js")
+    dashboard_data = build_dashboard_payload(data)
     with js_output.open("w") as f:
         f.write("window.TUNES_DATA = ")
-        json.dump(data, f, default=str)
+        json.dump(dashboard_data, f, default=str)
         f.write(";\n")
 
-    print(f"  -> Browser data saved to {js_output}")
+    print(f"  → Browser data saved to {js_output}")
     print("\nSummary:")
     ov = data["overview"]
-    print(f"  {ov['total_scrobbles']:,} scrobbles | {ov['unique_artists']:,} artists | {ov['date_start']} -> {ov['date_end']}")
+    print(f"  {ov['total_scrobbles']:,} scrobbles | {ov['unique_artists']:,} artists | {ov['date_start']} → {ov['date_end']}")
     print(f"  Top artist: {data['top_artists'][0]['artist']} ({data['top_artists'][0]['plays']:,} plays)")
     print(f"  Longest streak: {data['streak']['longest_streak']} days")
     print(f"\nDone! Open dashboard.html in a browser to explore your data.")
