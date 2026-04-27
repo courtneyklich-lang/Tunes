@@ -5,7 +5,7 @@ Reads a Last.fm CSV export and outputs analytics data as JSON
 for use with the accompanying dashboard.html file.
 
 Usage:
-    python analyze.py <Users/owner/Desktop/tunes/Tunes/Data/CourtneyListeningHistory.csv> [--output data.json]
+    python3 Analyze.py Data/CourtneyListeningHistory.csv --output data.json
 
 Export your Last.fm data at: https://lastfm.ghan.nl/export/
 """
@@ -15,12 +15,12 @@ import json
 import argparse
 import sys
 from pathlib import Path
-from datetime import timedelta
 
 
 def load_data(filepath: str) -> pd.DataFrame:
     """Load and parse the Last.fm CSV export."""
-    df = pd.read_csv("Users/owner/Desktop/tunes/Tunes/Data/CourtneyListeningHistory.csv")
+    csv_path = Path(filepath).expanduser().resolve()
+    df = pd.read_csv(csv_path)
 
     # Parse timestamps
     df["utc_time"] = pd.to_datetime(df["utc_time"], format="%d %b %Y, %H:%M", errors="coerce")
@@ -59,6 +59,12 @@ def compute_top_artists(df: pd.DataFrame, n: int = 15) -> list:
     return [{"artist": artist, "plays": int(plays)} for artist, plays in counts.items()]
 
 
+def compute_all_artists(df: pd.DataFrame) -> list:
+    """Full artist ranking for filtering/search in the dashboard."""
+    counts = df["artist"].value_counts()
+    return [{"artist": artist, "plays": int(plays)} for artist, plays in counts.items()]
+
+
 def compute_top_tracks(df: pd.DataFrame, n: int = 15) -> list:
     """Most played tracks overall."""
     counts = (
@@ -71,6 +77,17 @@ def compute_top_tracks(df: pd.DataFrame, n: int = 15) -> list:
     return counts.rename(columns={"artist": "artist", "track": "track", "plays": "plays"}).to_dict(orient="records")
 
 
+def compute_all_tracks(df: pd.DataFrame) -> list:
+    """Full track ranking for filtering/search in the dashboard."""
+    counts = (
+        df.groupby(["artist", "track"])
+        .size()
+        .sort_values(ascending=False)
+        .reset_index(name="plays")
+    )
+    return counts.to_dict(orient="records")
+
+
 def compute_top_albums(df: pd.DataFrame, n: int = 15) -> list:
     """Most played albums overall."""
     counts = (
@@ -79,6 +96,18 @@ def compute_top_albums(df: pd.DataFrame, n: int = 15) -> list:
         .size()
         .sort_values(ascending=False)
         .head(n)
+        .reset_index(name="plays")
+    )
+    return counts.to_dict(orient="records")
+
+
+def compute_all_albums(df: pd.DataFrame) -> list:
+    """Full album ranking for filtering/search in the dashboard."""
+    counts = (
+        df[df["album"].notna() & (df["album"] != "")]
+        .groupby(["artist", "album"])
+        .size()
+        .sort_values(ascending=False)
         .reset_index(name="plays")
     )
     return counts.to_dict(orient="records")
@@ -98,7 +127,7 @@ def compute_plays_by_month(df: pd.DataFrame) -> list:
 
 
 def compute_plays_by_hour(df: pd.DataFrame) -> list:
-    """Average scrobbles by hour of day (0–23)."""
+    """Average scrobbles by hour of day (0-23)."""
     hour_totals = df["hour"].value_counts().sort_index()
     n_days = df["date"].nunique() or 1
     return [
@@ -136,7 +165,7 @@ def compute_sessions(df: pd.DataFrame, gap_minutes: int = 30) -> dict:
 
 def compute_artist_discovery(df: pd.DataFrame) -> list:
     """
-    First play date for each artist — returns the 20 most recently discovered artists
+    First play date for each artist - returns the 20 most recently discovered artists
     who have been played more than once (to filter one-offs).
     """
     artist_stats = df.groupby("artist").agg(
@@ -159,7 +188,7 @@ def compute_artist_discovery(df: pd.DataFrame) -> list:
 
 
 def compute_monthly_obsessions(df: pd.DataFrame, n: int = 10) -> list:
-    """Top artist per month — reveals era-specific obsessions."""
+    """Top artist per month - reveals era-specific obsessions."""
     monthly = (
         df.groupby(["ym", "artist"])
         .size()
@@ -228,14 +257,17 @@ def compute_streak(df: pd.DataFrame) -> dict:
 def run(csv_path: str, output_path: str):
     print(f"Loading data from {csv_path}...")
     df = load_data(csv_path)
-    print(f"  → {len(df):,} scrobbles loaded")
+    print(f"  -> {len(df):,} scrobbles loaded")
 
     print("Computing analytics...")
     data = {
         "overview": compute_overview(df),
         "top_artists": compute_top_artists(df),
+        "all_artists": compute_all_artists(df),
         "top_tracks": compute_top_tracks(df),
+        "all_tracks": compute_all_tracks(df),
         "top_albums": compute_top_albums(df),
+        "all_albums": compute_all_albums(df),
         "plays_by_year": compute_plays_by_year(df),
         "plays_by_month": compute_plays_by_month(df),
         "plays_by_hour": compute_plays_by_hour(df),
@@ -248,13 +280,24 @@ def run(csv_path: str, output_path: str):
         "streak": compute_streak(df),
     }
 
-    with open(output_path, "w") as f:
+    output_file = Path(output_path).expanduser()
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_file.open("w") as f:
         json.dump(data, f, indent=2, default=str)
 
-    print(f"  → Data saved to {output_path}")
+    print(f"  -> Data saved to {output_file}")
+
+    js_output = output_file.with_suffix(".js")
+    with js_output.open("w") as f:
+        f.write("window.TUNES_DATA = ")
+        json.dump(data, f, default=str)
+        f.write(";\n")
+
+    print(f"  -> Browser data saved to {js_output}")
     print("\nSummary:")
     ov = data["overview"]
-    print(f"  {ov['total_scrobbles']:,} scrobbles | {ov['unique_artists']:,} artists | {ov['date_start']} → {ov['date_end']}")
+    print(f"  {ov['total_scrobbles']:,} scrobbles | {ov['unique_artists']:,} artists | {ov['date_start']} -> {ov['date_end']}")
     print(f"  Top artist: {data['top_artists'][0]['artist']} ({data['top_artists'][0]['plays']:,} plays)")
     print(f"  Longest streak: {data['streak']['longest_streak']} days")
     print(f"\nDone! Open dashboard.html in a browser to explore your data.")
